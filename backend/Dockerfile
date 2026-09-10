@@ -5,16 +5,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DENO_INSTALL=/usr/local
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
+    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg unzip \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://deno.land/install.sh | sh \
     && deno --version
 
 WORKDIR /app
+
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
+
 COPY app ./app
 COPY start.sh ./start.sh
+
 RUN chmod +x ./start.sh \
     && python -m compileall -q app
 
@@ -28,5 +32,7 @@ ENV PORT=10000 \
     VELO_DOWNLOAD_LIMIT_PER_HOUR=5
 
 EXPOSE 10000
+
 USER 65532:65532
+
 ENTRYPOINT ["./start.sh"]
