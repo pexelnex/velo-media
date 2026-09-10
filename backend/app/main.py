@@ -30,7 +30,11 @@ def env_int(name: str, default: int, minimum: int) -> int:
 MAX_JOBS = env_int("VELO_MAX_CONCURRENT_JOBS", 1, 1)
 MAX_QUEUE = env_int("VELO_MAX_QUEUE", 2, 0)
 JOB_TTL = env_int("VELO_JOB_TTL_SECONDS", 1800, 300)
-MAX_FILE_BYTES = env_int("VELO_MAX_FILE_BYTES", 1024 * 1024 * 1024, 50 * 1024 * 1024)
+MAX_FILE_BYTES = env_int(
+    "VELO_MAX_FILE_BYTES",
+    1024 * 1024 * 1024,
+    50 * 1024 * 1024,
+)
 INFO_LIMIT = env_int("VELO_INFO_LIMIT_PER_MINUTE", 10, 1)
 DOWNLOAD_LIMIT = env_int("VELO_DOWNLOAD_LIMIT_PER_HOUR", 5, 1)
 RATE_WINDOW = 60
@@ -209,6 +213,7 @@ def extractor_options(skip_download: bool = True) -> dict[str, Any]:
         "retries": 2,
         "fragment_retries": 2,
         "extractor_retries": 2,
+        "impersonate": "chrome",
     }
 
 
@@ -721,4 +726,4 @@ def job_file(job_id: str) -> FileResponse:
             "X-Content-Type-Options": "nosniff",
         },
         background=BackgroundTask(cleanup),
-)
+            )
