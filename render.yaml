@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: velo-media-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: VELO_MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: VELO_MAX_QUEUE
+        value: "2"
+      - key: VELO_JOB_TTL_SECONDS
+        value: "1800"
+      - key: VELO_MAX_FILE_BYTES
+        value: "1073741824"
+      - key: VELO_INFO_LIMIT_PER_MINUTE
+        value: "10"
+      - key: VELO_DOWNLOAD_LIMIT_PER_HOUR
+        value: "5"
