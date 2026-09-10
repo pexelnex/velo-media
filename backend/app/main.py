@@ -16,19 +16,15 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, HttpUrl, field_validator
 from starlette.background import BackgroundTask
 
-
 APP_VERSION = "2.1.0"
+TMP_ROOT = Path(os.getenv("VELO_TMP_DIR", "/tmp/velo"))
+TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-
 logger = logging.getLogger("velo")
-
-
-TMP_ROOT = Path(os.getenv("VELO_TMP_DIR", "/tmp/velo"))
-TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 def env_int(name: str, default: int, minimum: int) -> int:
@@ -41,32 +37,23 @@ def env_int(name: str, default: int, minimum: int) -> int:
 MAX_JOBS = env_int("VELO_MAX_CONCURRENT_JOBS", 1, 1)
 MAX_QUEUE = env_int("VELO_MAX_QUEUE", 2, 0)
 JOB_TTL = env_int("VELO_JOB_TTL_SECONDS", 1800, 300)
-
-MAX_FILE_BYTES = env_int(
-    "VELO_MAX_FILE_BYTES",
-    1024 * 1024 * 1024,
-    50 * 1024 * 1024,
-)
-
+MAX_FILE_BYTES = env_int("VELO_MAX_FILE_BYTES", 1024**3, 50 * 1024**2)
 INFO_LIMIT = env_int("VELO_INFO_LIMIT_PER_MINUTE", 10, 1)
 DOWNLOAD_LIMIT = env_int("VELO_DOWNLOAD_LIMIT_PER_HOUR", 5, 1)
 
 RATE_WINDOW = 60
 DOWNLOAD_WINDOW = 3600
 
-
 app = FastAPI(
     title="Velo Media API",
     version=APP_VERSION,
 )
-
 
 origins = [
     x.strip()
     for x in os.getenv("CORS_ORIGINS", "*").split(",")
     if x.strip()
 ]
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,33 +65,16 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def security_headers(request: Request, call_next) -> Response:
+async def security_headers(request: Request, call_next):
     response = await call_next(request)
 
-    response.headers.setdefault(
-        "X-Content-Type-Options",
-        "nosniff",
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
     )
-
-    response.headers.setdefault(
-        "X-Frame-Options",
-        "DENY",
-    )
-
-    response.headers.setdefault(
-        "Referrer-Policy",
-        "no-referrer",
-    )
-
-    response.headers.setdefault(
-        "Permissions-Policy",
-        "camera=(), microphone=(), geolocation=()",
-    )
-
-    response.headers.setdefault(
-        "Cache-Control",
-        "no-store",
-    )
+    response.headers["Cache-Control"] = "no-store"
 
     return response
 
@@ -115,7 +85,6 @@ rate_limits: dict[str, dict[str, list[float]]] = {}
 lock = threading.RLock()
 job_slots = threading.Semaphore(MAX_JOBS)
 
-
 YOUTUBE_HOSTS = {
     "youtube.com",
     "www.youtube.com",
@@ -124,7 +93,6 @@ YOUTUBE_HOSTS = {
     "youtu.be",
     "www.youtu.be",
 }
-
 
 QUALITY_VALUES = {
     "best",
@@ -146,11 +114,7 @@ class DownloadRequest(BaseModel):
     @field_validator("quality")
     @classmethod
     def validate_quality(cls, value: str) -> str:
-        return (
-            value
-            if value in QUALITY_VALUES
-            else "best"
-        )
+        return value if value in QUALITY_VALUES else "best"
 
 
 def validate_youtube_url(url: str) -> str:
@@ -173,9 +137,7 @@ def validate_youtube_url(url: str) -> str:
 
     if host in {"youtu.be", "www.youtu.be"}:
         video_id = (
-            parsed.path
-            .strip("/")
-            .split("/")[0]
+            parsed.path.strip("/").split("/")[0]
         )
 
     elif parsed.path == "/watch":
@@ -242,12 +204,10 @@ def enforce_rate_limit(
             [],
         )
 
-        cutoff = now - window
-
         events[:] = [
-            stamp
-            for stamp in events
-            if stamp > cutoff
+            t
+            for t in events
+            if t > now - window
         ]
 
         if len(events) >= limit:
@@ -258,14 +218,8 @@ def enforce_rate_limit(
 
         events.append(now)
 
-        if len(record) == 0:
-            rate_limits.pop(
-                key,
-                None,
-            )
 
-
-def clean_title(value: str) -> str:
+def clean_title(value: str | None) -> str:
     value = re.sub(
         r'[\\/:*?"<>|\x00-\x1f]+',
         "_",
@@ -292,51 +246,35 @@ def human_duration(
     ):
         return None
 
-    h, rem = divmod(
+    hours, remainder = divmod(
         total,
         3600,
     )
 
-    m, s = divmod(
-        rem,
+    minutes, seconds = divmod(
+        remainder,
         60,
     )
 
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
 
-    return f"{m}:{s:02d}"
+    return f"{minutes}:{seconds:02d}"
 
 
 def quality_format(
     quality: str,
 ) -> str:
-    if quality == "1080":
+    if quality in {
+        "1080",
+        "720",
+        "480",
+        "360",
+    }:
         return (
-            "bestvideo[height<=1080]"
+            f"bestvideo[height<={quality}]"
             "+bestaudio/"
-            "best[height<=1080]/best"
-        )
-
-    if quality == "720":
-        return (
-            "bestvideo[height<=720]"
-            "+bestaudio/"
-            "best[height<=720]/best"
-        )
-
-    if quality == "480":
-        return (
-            "bestvideo[height<=480]"
-            "+bestaudio/"
-            "best[height<=480]/best"
-        )
-
-    if quality == "360":
-        return (
-            "bestvideo[height<=360]"
-            "+bestaudio/"
-            "best[height<=360]/best"
+            f"best[height<={quality}]/best"
         )
 
     return "bestvideo+bestaudio/best"
@@ -362,7 +300,7 @@ def get_info(
     url: str,
 ) -> dict[str, Any]:
     logger.info(
-        "Starting YouTube info extraction for URL"
+        "Starting YouTube info extraction"
     )
 
     try:
@@ -382,12 +320,11 @@ def get_info(
 
     except Exception as exc:
         logger.exception(
-            "YouTube info extraction failed. "
-            "exception_type=%s exception_repr=%r",
+            "YouTube info extraction failed: "
+            "type=%s repr=%r",
             type(exc).__name__,
             exc,
         )
-
         raise
 
 
@@ -411,16 +348,16 @@ def available_qualities(
             heights.add(height)
 
     result = [
-        q
-        for q in (
+        quality
+        for quality in (
             "1080",
             "720",
             "480",
             "360",
         )
         if any(
-            h >= int(q)
-            for h in heights
+            height >= int(quality)
+            for height in heights
         )
     ]
 
@@ -431,537 +368,30 @@ def prune_jobs() -> None:
     now = time.time()
 
     with lock:
-        stale = [
-            job_id
-            for job_id, job in jobs.items()
-            if job.get("status")
-            in {"complete", "error"}
-            and now
-            - job.get(
-                "updated_at",
-                now,
-            )
-            > JOB_TTL
-        ]
-
-        for job_id in stale:
-            job = jobs.pop(
-                job_id,
-                None,
-            )
-
-            if job and job.get("file"):
-                shutil.rmtree(
-                    Path(
-                        job["file"]
-                    ).parent,
-                    ignore_errors=True,
+        for job_id, job in list(
+            jobs.items()
+        ):
+            if (
+                job.get("status")
+                in {"complete", "error"}
+                and now
+                - job.get(
+                    "updated_at",
+                    now,
                 )
-
-        for key in list(rate_limits):
-            record = rate_limits[key]
-
-            for bucket, events in list(
-                record.items()
+                > JOB_TTL
             ):
-                cutoff = now - (
-                    DOWNLOAD_WINDOW
-                    if bucket == "download"
-                    else RATE_WINDOW
-                )
-
-                events[:] = [
-                    stamp
-                    for stamp in events
-                    if stamp > cutoff
-                ]
-
-                if not events:
-                    record.pop(
-                        bucket,
-                        None,
-                    )
-
-            if not record:
-                rate_limits.pop(
-                    key,
+                jobs.pop(
+                    job_id,
                     None,
                 )
 
-
-def update_job(
-    job_id: str,
-    **changes: Any,
-) -> None:
-    with lock:
-        if job_id in jobs:
-            jobs[job_id].update(
-                changes
-            )
-
-            jobs[job_id][
-                "updated_at"
-            ] = time.time()
-
-
-def queued_count() -> int:
-    return sum(
-        1
-        for job in jobs.values()
-        if job.get("status")
-        == "queued"
-    )
-
-
-def run_job(
-    job_id: str,
-    url: str,
-    quality: str,
-) -> None:
-    job_dir = TMP_ROOT / job_id
-    acquired = False
-
-    try:
-        update_job(
-            job_id,
-            message="Waiting for an available worker…",
-        )
-
-        job_slots.acquire()
-        acquired = True
-
-        job_dir.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        def hook(
-            data: dict[str, Any],
-        ) -> None:
-            status = data.get(
-                "status"
-            )
-
-            if status == "downloading":
-                total = (
-                    data.get(
-                        "total_bytes"
+                if job.get("file"):
+                    shutil.rmtree(
+                        Path(
+                            job["file"]
+                        ).parent,
+                        ignore_errors=True,
                     )
-                    or data.get(
-                        "total_bytes_estimate"
-                    )
-                    or 0
-                )
 
-                done = (
-                    data.get(
-                        "downloaded_bytes"
-                    )
-                    or 0
-                )
-
-                progress = (
-                    done / total * 100
-                    if total
-                    else 0
-                )
-
-                update_job(
-                    job_id,
-                    status="downloading",
-                    progress=min(
-                        91,
-                        round(
-                            progress,
-                            1,
-                        ),
-                    ),
-                    message="Downloading…",
-                    speed=(
-                        data.get(
-                            "speed"
-                        )
-                        or 0
-                    ),
-                    eta=data.get(
-                        "eta"
-                    ),
-                )
-
-            elif status == "finished":
-                update_job(
-                    job_id,
-                    progress=93,
-                    message="Merging audio and video…",
-                )
-
-        update_job(
-            job_id,
-            status="downloading",
-            progress=1,
-            message="Preparing media…",
-        )
-
-        outtmpl = str(
-            job_dir
-            / "%(title).150B.%(ext)s"
-        )
-
-        opts = extractor_options(
-            skip_download=False
-        )
-
-        opts.update(
-            {
-                "format": quality_format(
-                    quality
-                ),
-                "merge_output_format": "mp4",
-                "outtmpl": outtmpl,
-                "progress_hooks": [
-                    hook
-                ],
-                "restrictfilenames": True,
-                "max_filesize": MAX_FILE_BYTES,
-            }
-        )
-
-        logger.info(
-            "Starting download job %s quality=%s",
-            job_id,
-            quality,
-        )
-
-        with yt_dlp.YoutubeDL(
-            opts
-        ) as ydl:
-            info = ydl.extract_info(
-                url,
-                download=True,
-            )
-
-            prepared = Path(
-                ydl.prepare_filename(
-                    info
-                )
-            )
-
-            candidates = [
-                prepared.with_suffix(
-                    ".mp4"
-                ),
-                prepared,
-            ]
-
-            media_files = [
-                p
-                for p in job_dir.iterdir()
-                if p.is_file()
-                and p.suffix.lower()
-                in {
-                    ".mp4",
-                    ".mkv",
-                    ".webm",
-                    ".mov",
-                    ".m4v",
-                }
-            ]
-
-            final = next(
-                (
-                    p
-                    for p in candidates
-                    if p.exists()
-                ),
-                None,
-            )
-
-            if (
-                final is None
-                and media_files
-            ):
-                final = max(
-                    media_files,
-                    key=lambda p:
-                    p.stat().st_mtime,
-                )
-
-            if (
-                final is None
-                or not final.exists()
-            ):
-                raise RuntimeError(
-                    "The media file was not produced."
-                )
-
-            if (
-                final.stat().st_size
-                > MAX_FILE_BYTES
-            ):
-                raise RuntimeError(
-                    "The generated file is larger than the free-server limit."
-                )
-
-        extension = (
-            final.suffix.lower()
-            or ".mp4"
-        )
-
-        filename = (
-            clean_title(
-                info.get("title")
-            )
-            + extension
-        )
-
-        update_job(
-            job_id,
-            status="complete",
-            progress=100,
-            message="Download ready",
-            filename=filename,
-            file=str(final),
-            title=(
-                info.get("title")
-                or "Video"
-            ),
-        )
-
-        logger.info(
-            "Download job %s completed successfully",
-            job_id,
-        )
-
-    except Exception as exc:
-        logger.exception(
-            "Download job %s failed. "
-            "exception_type=%s exception_repr=%r",
-            job_id,
-            type(exc).__name__,
-            exc,
-        )
-
-        shutil.rmtree(
-            job_dir,
-            ignore_errors=True,
-        )
-
-        message = str(exc).replace(
-            "\n",
-            " ",
-        ).strip()
-
-        lowered = message.lower()
-
-        if (
-            "sign in to confirm"
-            in lowered
-            or "bot"
-            in lowered
-        ):
-            message = (
-                "YouTube rejected the server request. "
-                "Try another video or try again later."
-            )
-
-        if not message:
-            message = (
-                f"{type(exc).__name__}: "
-                f"{repr(exc)}"
-            )
-
-        update_job(
-            job_id,
-            status="error",
-            progress=0,
-            message=message[:600],
-        )
-
-    finally:
-        if acquired:
-            job_slots.release()
-
-
-@app.get("/")
-def root() -> dict[str, Any]:
-    return {
-        "name": "Velo Media API",
-        "version": APP_VERSION,
-        "status": "ok",
-    }
-
-
-@app.get("/health")
-def health() -> dict[str, Any]:
-    prune_jobs()
-
-    with lock:
-        active = sum(
-            1
-            for job in jobs.values()
-            if job.get("status")
-            == "downloading"
-        )
-
-        queued = queued_count()
-
-    return {
-        "status": "ok",
-        "version": APP_VERSION,
-        "active_jobs": active,
-        "queued_jobs": queued,
-        "max_concurrent_jobs": MAX_JOBS,
-        "queue_limit": MAX_QUEUE,
-    }
-
-
-@app.post("/api/info")
-def info(
-    req: InfoRequest,
-    request: Request,
-) -> dict[str, Any]:
-    prune_jobs()
-
-    enforce_rate_limit(
-        request,
-        "info",
-        INFO_LIMIT,
-        RATE_WINDOW,
-    )
-
-    url = str(req.url)
-
-    validate_youtube_url(url)
-
-    logger.info(
-        "Received /api/info request"
-    )
-
-    try:
-        data = get_info(url)
-
-        return {
-            "id": data.get("id"),
-            "title": data.get("title"),
-            "thumbnail": data.get("thumbnail"),
-            "duration": data.get("duration"),
-            "duration_text": human_duration(
-                data.get("duration")
-            ),
-            "webpage_url": (
-                data.get(
-                    "webpage_url"
-                )
-                or url
-            ),
-            "uploader": data.get(
-                "uploader"
-            ),
-            "channel": data.get(
-                "channel"
-            ),
-            "view_count": data.get(
-                "view_count"
-            ),
-            "available_qualities":
-                available_qualities(
-                    data
-                ),
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as exc:
-        logger.exception(
-            "/api/info failed. "
-            "exception_type=%s "
-            "exception_repr=%r",
-            type(exc).__name__,
-            exc,
-        )
-
-        detail = (
-            "Unable to analyze this video: "
-            f"{type(exc).__name__}: "
-            f"{repr(exc)}"
-        )
-
-        raise HTTPException(
-            400,
-            detail[:900],
-        ) from exc
-
-
-@app.post("/api/download")
-def download(
-    req: DownloadRequest,
-    request: Request,
-) -> dict[str, Any]:
-    prune_jobs()
-
-    enforce_rate_limit(
-        request,
-        "download",
-        DOWNLOAD_LIMIT,
-        DOWNLOAD_WINDOW,
-    )
-
-    url = str(req.url)
-
-    validate_youtube_url(url)
-
-    with lock:
-        queued = queued_count()
-
-        if queued >= MAX_QUEUE:
-            raise HTTPException(
-                429,
-                "The free server queue is full. "
-                "Please wait for a download to finish.",
-            )
-
-        job_id = uuid.uuid4().hex
-
-        jobs[job_id] = {
-            "job_id": job_id,
-            "status": "queued",
-            "progress": 0,
-            "message": "Queued…",
-            "filename": None,
-            "file": None,
-            "created_at": time.time(),
-            "updated_at": time.time(),
-        }
-
-    thread = threading.Thread(
-        target=run_job,
-        args=(
-            job_id,
-            url,
-            req.quality,
-        ),
-        daemon=True,
-        name=f"velo-{job_id[:8]}",
-    )
-
-    thread.start()
-
-    return {
-        "job_id": job_id,
-        "status": "queued",
-    }
-
-
-@app.get("/api/download/{job_id}")
-def job_status(
-    job_id: str,
-) -> dict[str, Any]:
-    if not re.fullmatch(
-        r"[a-f0-9]{32}",
-        job_id,
-    ):
-        raise HTTPException(
-            400,
-            "Invalid job ID.",
-   
+       
